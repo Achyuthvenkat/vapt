@@ -33,6 +33,7 @@ class LicenseResponse(BaseModel):
 # Configuration
 UNIFIED_SERVER_URL = os.getenv("UNIFIED_SERVER_URL")
 hostname = socket.gethostname()
+ip_address = socket.gethostbyname(hostname)
 
 
 def check_server():
@@ -160,19 +161,25 @@ def get_python_packages():
 
 
 def get_node_packages():
-    packages = []
     try:
+        npm_cmd = "npm.cmd" if os.name == "nt" else "npm"
         output = subprocess.check_output(
-            [r"C:Program Files/nodejs/npm.cmd", "list", "--json", "--depth=0"]
+            [npm_cmd, "list", "--json", "--depth=0", "--silent"],
+            stderr=subprocess.DEVNULL,
         ).decode()
+
         data = json.loads(output)
         dependencies = data.get("dependencies", {})
-        for name, info in dependencies.items():
-            version_ = info.get("version", "")
-            packages.append((name, version_))
+
+        # return as list of (name, version) tuples
+        packages = [
+            (name, info.get("version", "")) for name, info in dependencies.items()
+        ]
+        return packages
+
     except Exception as e:
         print(f"Failed to get Node.js packages: {e}")
-    return packages
+        return []
 
 
 def get_java_packages():

@@ -287,7 +287,7 @@ const SecurityDashboard = () => {
       const lastScanned = hostData.length > 0 ? new Date().toLocaleDateString() + ', ' + new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : 'Never';
       
       // Get IP address if available in your data
-      const ipAddress = hostData.length > 0 ? (hostData[0].ip_address || '192.168.1.100') : 'Unknown';
+      const ipAddress = hostData.length > 0 ? (hostData[0].ip_address || 'Unknown') : 'Unknown';
       
       return {
         hostname,
