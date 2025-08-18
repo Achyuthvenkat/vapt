@@ -11,10 +11,100 @@ import {
   Search,
   RefreshCw,
   Eye,
-  Database
+  Database,
+  ChevronLeft,
+  ChevronRight
 } from 'lucide-react';
 
 const API_BASE_URL = 'http://localhost:8000/api';
+
+const Pagination = ({ currentPage, totalItems, itemsPerPage, onPageChange }) => {
+  const totalPages = Math.ceil(totalItems / itemsPerPage);
+  const startItem = (currentPage - 1) * itemsPerPage + 1;
+  const endItem = Math.min(currentPage * itemsPerPage, totalItems);
+
+  if (totalPages <= 1) return null;
+
+  const getPageNumbers = () => {
+    const delta = 2; // Number of pages to show on each side of current page
+    const range = [];
+    const rangeWithDots = [];
+
+    // Always include first page
+    range.push(1);
+
+    // Calculate range around current page
+    for (let i = Math.max(2, currentPage - delta); i <= Math.min(totalPages - 1, currentPage + delta); i++) {
+      range.push(i);
+    }
+
+    // Always include last page if there are more than 1 pages
+    if (totalPages > 1) {
+      range.push(totalPages);
+    }
+
+    // Add dots where there are gaps
+    let prev = 0;
+    for (const i of range) {
+      if (prev && i - prev > 1) {
+        rangeWithDots.push('...');
+      }
+      rangeWithDots.push(i);
+      prev = i;
+    }
+
+    return rangeWithDots;
+  };
+
+  return (
+    <div className="flex items-center justify-between px-6 py-3 bg-white border-t border-gray-200">
+      <div className="flex items-center text-sm text-gray-700">
+        Showing <span className="font-medium">{startItem}</span> to <span className="font-medium">{endItem}</span> of{' '}
+        <span className="font-medium">{totalItems}</span> results
+      </div>
+      <div className="flex items-center space-x-2">
+        <button
+          onClick={() => onPageChange(currentPage - 1)}
+          disabled={currentPage === 1}
+          className="flex items-center px-3 py-2 text-sm font-medium text-gray-500 bg-white border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          <ChevronLeft className="h-4 w-4 mr-1" />
+          Previous
+        </button>
+        
+        <div className="flex space-x-1">
+          {getPageNumbers().map((page, index) => (
+            <React.Fragment key={index}>
+              {page === '...' ? (
+                <span className="px-3 py-2 text-sm font-medium text-gray-700">...</span>
+              ) : (
+                <button
+                  onClick={() => onPageChange(page)}
+                  className={`px-3 py-2 text-sm font-medium rounded-md ${
+                    currentPage === page
+                      ? 'bg-blue-600 text-white'
+                      : 'text-gray-700 bg-white border border-gray-300 hover:bg-gray-50'
+                  }`}
+                >
+                  {page}
+                </button>
+              )}
+            </React.Fragment>
+          ))}
+        </div>
+
+        <button
+          onClick={() => onPageChange(currentPage + 1)}
+          disabled={currentPage === totalPages}
+          className="flex items-center px-3 py-2 text-sm font-medium text-gray-500 bg-white border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          Next
+          <ChevronRight className="h-4 w-4 ml-1" />
+        </button>
+      </div>
+    </div>
+  );
+};
 
 const SecurityDashboard = () => {
   const [activeTab, setActiveTab] = useState('sbom');
@@ -24,6 +114,12 @@ const SecurityDashboard = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedHostname, setSelectedHostname] = useState('');
   const [showCriticalOnly, setShowCriticalOnly] = useState(true);
+  
+  // Pagination states
+  const [sbomCurrentPage, setSbomCurrentPage] = useState(1);
+  const [qualysCurrentPage, setQualysCurrentPage] = useState(1);
+  const [hostsCurrentPage, setHostsCurrentPage] = useState(1);
+  const itemsPerPage = 10;
 
   // Fetch SBOM data
   const fetchSbomData = async (hostname = '') => {
@@ -34,6 +130,7 @@ const SecurityDashboard = () => {
       const result = await response.json();
       if (result.status === 'success') {
         setSbomData(result.data);
+        setSbomCurrentPage(1); // Reset pagination when data changes
       }
     } catch (error) {
       console.error('Error fetching SBOM data:', error);
@@ -50,6 +147,7 @@ const SecurityDashboard = () => {
       const result = await response.json();
       if (result.status === 'success') {
         setQualysData(result.data);
+        setQualysCurrentPage(1); // Reset pagination when data changes
       }
     } catch (error) {
       console.error('Error fetching Qualys data:', error);
@@ -104,6 +202,14 @@ const SecurityDashboard = () => {
     }
   }, [activeTab]);
 
+  // Reset search and pagination when switching tabs
+  useEffect(() => {
+    setSearchTerm('');
+    setSbomCurrentPage(1);
+    setQualysCurrentPage(1);
+    setHostsCurrentPage(1);
+  }, [activeTab]);
+
   // Filter functions
   const getUniqueHostnames = () => {
     const hostnames = [...new Set(sbomData.map(item => item.hostname))];
@@ -140,6 +246,13 @@ const SecurityDashboard = () => {
     }
     
     return filtered;
+  };
+
+  // Pagination helpers
+  const getPaginatedData = (data, currentPage) => {
+    const startIndex = (currentPage - 1) * itemsPerPage;
+    const endIndex = startIndex + itemsPerPage;
+    return data.slice(startIndex, endIndex);
   };
 
   // Get host-specific data
@@ -355,7 +468,7 @@ const SecurityDashboard = () => {
             </div>
 
             {/* Hosts Overview Section */}
-            <div className="bg-white rounded-lg shadow">
+            <div className="bg-white rounded-lg shadow overflow-hidden">
               <div className="px-6 py-4 border-b border-gray-200">
                 <h3 className="text-lg font-medium text-gray-900">Hosts Overview</h3>
               </div>
@@ -400,7 +513,7 @@ const SecurityDashboard = () => {
                         </td>
                       </tr>
                     ) : (
-                      getHostOverview().map((host, index) => (
+                      getPaginatedData(getHostOverview(), hostsCurrentPage).map((host, index) => (
                         <tr key={index} className="hover:bg-gray-50">
                           <td className="px-6 py-4">
                             <div>
@@ -474,6 +587,14 @@ const SecurityDashboard = () => {
                   </tbody>
                 </table>
               </div>
+              {!loading && getHostOverview().length > 0 && (
+                <Pagination
+                  currentPage={hostsCurrentPage}
+                  totalItems={getHostOverview().length}
+                  itemsPerPage={itemsPerPage}
+                  onPageChange={setHostsCurrentPage}
+                />
+              )}
             </div>
 
             {/* Package Details Table (shown when a host is selected) */}
@@ -490,13 +611,17 @@ const SecurityDashboard = () => {
                           placeholder="Search packages or vulnerabilities..."
                           className="pl-10 pr-4 py-2 border border-gray-300 rounded-lg w-80"
                           value={searchTerm}
-                          onChange={(e) => setSearchTerm(e.target.value)}
+                          onChange={(e) => {
+                            setSearchTerm(e.target.value);
+                            setSbomCurrentPage(1); // Reset pagination when searching
+                          }}
                         />
                       </div>
                       <button
                         onClick={() => {
                           setSelectedHostname('');
                           setSearchTerm('');
+                          setSbomCurrentPage(1);
                         }}
                         className="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700"
                       >
@@ -548,7 +673,7 @@ const SecurityDashboard = () => {
                         </tr>
                       </thead>
                       <tbody className="bg-white divide-y divide-gray-200">
-                        {getFilteredSbomData().map((item, index) => (
+                        {getPaginatedData(getFilteredSbomData(), sbomCurrentPage).map((item, index) => (
                           <tr key={index} className="hover:bg-gray-50">
                             <td className="px-6 py-4 whitespace-nowrap">
                               <div>
@@ -593,6 +718,14 @@ const SecurityDashboard = () => {
                       </tbody>
                     </table>
                   </div>
+                  {!loading && getFilteredSbomData().length > 0 && (
+                    <Pagination
+                      currentPage={sbomCurrentPage}
+                      totalItems={getFilteredSbomData().length}
+                      itemsPerPage={itemsPerPage}
+                      onPageChange={setSbomCurrentPage}
+                    />
+                  )}
                 </div>
               </div>
             )}
@@ -612,7 +745,10 @@ const SecurityDashboard = () => {
                       placeholder="Search assets, IPs, or QIDs..."
                       className="pl-10 pr-4 py-2 border border-gray-300 rounded-lg w-80"
                       value={searchTerm}
-                      onChange={(e) => setSearchTerm(e.target.value)}
+                      onChange={(e) => {
+                        setSearchTerm(e.target.value);
+                        setQualysCurrentPage(1); // Reset pagination when searching
+                      }}
                     />
                   </div>
                   <div className="flex items-center space-x-2">
@@ -757,7 +893,7 @@ const SecurityDashboard = () => {
                         </td>
                       </tr>
                     ) : (
-                      getFilteredQualysData().map((item, index) => (
+                      getPaginatedData(getFilteredQualysData(), qualysCurrentPage).map((item, index) => (
                         <tr key={index} className="hover:bg-gray-50">
                           <td className="px-6 py-4 whitespace-nowrap">
                             <div>
@@ -809,6 +945,14 @@ const SecurityDashboard = () => {
                   </tbody>
                 </table>
               </div>
+              {!loading && getFilteredQualysData().length > 0 && (
+                <Pagination
+                  currentPage={qualysCurrentPage}
+                  totalItems={getFilteredQualysData().length}
+                  itemsPerPage={itemsPerPage}
+                  onPageChange={setQualysCurrentPage}
+                />
+              )}
             </div>
           </div>
         )}
