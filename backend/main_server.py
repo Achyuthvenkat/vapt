@@ -15,12 +15,11 @@ import pandas as pd
 from datetime import datetime
 from typing import List, Optional
 import re
-from dotenv import load_dotenv
-from tqdm import tqdm
 import asyncio
-from packaging import version
-from packageurl import PackageURL
+from tqdm.asyncio import tqdm_asyncio
+from dotenv import load_dotenv
 from openai import AsyncOpenAI
+from analyze import INSTRUCTIONS, OUTPUT_SCHEMA
 import nest_asyncio
 
 # Apply nest_asyncio for async compatibility
@@ -47,9 +46,6 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
-
-# OpenAI client
-client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 
 # Database Models
@@ -107,262 +103,8 @@ class QualysData(Base):
 # Create tables
 Base.metadata.create_all(bind=engine)
 
-
-# Pydantic models
-class SBOMRequest(BaseModel):
-    hostname: str
-    packages: List[dict]
-
-
-class PackageRequest(BaseModel):
-    package_name: str
-    package_type: str
-
-
-class LicenseResponse(BaseModel):
-    license: str
-
-
-class VersionResponse(BaseModel):
-    latest_version: str
-
-
-# Dependency
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-
-# SBOM Analysis Schema (from original code)
-OUTPUT_SCHEMA = {
-    "type": "json_schema",
-    "name": "package_vulnerability_report",
-    "schema": {
-        "type": "object",
-        "properties": {
-            "Name": {
-                "type": "string",
-                "description": "Name of the package or library or any other, same as mentioned in the input.",
-            },
-            "Variation": {
-                "type": "string",
-                "description": "Type of the name mentioned in the input. Eg. package, library, framework, etc",
-            },
-            "Installed Version": {
-                "type": "string",
-                "description": "The version of the package or library  installed by the user, same as mentioned in the input",
-            },
-            "Latest Version": {
-                "type": "string",
-                "description": "The latest version of the package or library available, same as mentioned in the input if mentioned. If not mentioned give the right latest version",
-            },
-            "Package URL": {
-                "type": "string",
-                "description": "The URL of the package or library available, same as mentioned in the input if mentioned. If not mentioned give the right URL",
-            },
-            "Distribution URL": {
-                "type": "string",
-                "description": "The Distribution URL of the package or library available, same as mentioned in the input if mentioned. If not mentioned give the right Distribution URL",
-            },
-            "License": {
-                "type": "string",
-                "description": "The License for the packages or library available, same as mentioned in the input if mentioned. If not mentioned give the right License",
-            },
-            "Vulnerabilities": {
-                "type": "string",
-                "description": "Summary of vulnerabilities of the package, formatted in markdown with links to further information.",
-            },
-            "Suggestions": {
-                "type": "string",
-                "description": "Suggestion to mitigate the risk of the vulnerability or None.",
-            },
-            "License Summary": {
-                "type": "string",
-                "description": "explanation on the compliances regarding the licence based on whether it can be used in commercial and corparate organizations or not. Just Explain in one line",
-            },
-            "Verdict": {
-                "type": "string",
-                "description": "A final verdict on whether the package can be used in commercial and corparate organizations or not based on the complainces regarding its license, If can be used in commercial and corparate organizations then give **Allowed for Enterprice use**, if cannot be used the give **Requires Legal Review before organizational use**",
-            },
-        },
-        "required": [
-            "Name",
-            "Variation",
-            "Installed Version",
-            "Latest Version",
-            "Package URL",
-            "Distribution URL",
-            "License",
-            "Vulnerabilities",
-            "Suggestions",
-            "License Summary",
-            "Verdict",
-        ],
-        "additionalProperties": False,
-    },
-    "strict": True,
-}
-
-INSTRUCTIONS = """You are an expert cybersecurity analyst specializing in software vulnerability assessment and license compliance. You have comprehensive access to vulnerability databases and licensing information.
-
-You are given a JSON dict with package information containing:
-- name: Package/component name
-- version: Installed version 
-- type: Component type (Runtime, Library, Database, etc.)
-- latest: Latest available version
-- license: License information
-- purl: Package URL
-- dist_url: Distribution URL
-
-### PRIMARY MISSION:
-Conduct a thorough security and compliance assessment for each component using real-time vulnerability data and licensing analysis.
-
-### VULNERABILITY ANALYSIS WORKFLOW:
-
-#### Step 1: Real-Time Vulnerability Lookup
-**Primary Sources (Use Both):**
-1. **OSV.dev API**: https://api.osv.dev/v1/query
-   ```json
-   {
-     "package": {
-       "name": "<package_name>",
-       "ecosystem": "<ecosystem_type>"
-     },
-     "version": "<installed_version>"
-   }
-   ```
-
-2. **GitHub Advisory Database**: https://api.github.com/graphql
-   ```graphql
-   query {
-     securityVulnerabilities(package: "<package_name>", ecosystem: <ecosystem>, first: 20) {
-       nodes {
-         advisory { 
-           ghsaId 
-           summary 
-           publishedAt 
-           severity 
-           cvss { score }
-           references { url }
-         }
-         vulnerableVersionRange
-         firstPatchedVersion { identifier }
-       }
-     }
-   }
-   ```
-
-3. **National Vulnerability Database (NVD)**: Search for CVEs related to the package
-4. **CISA Known Exploited Vulnerabilities**: Check if any vulnerabilities are actively exploited
-5. **PHP Security Advisories**: For Composer packages, check https://github.com/FriendsOfPHP/security-advisories
-
-#### Step 2: Vulnerability Validation & Filtering
-**CRITICAL REQUIREMENTS:**
-- **ONLY include vulnerabilities that affect the exact installed version**
-- **EXCLUDE vulnerabilities already fixed in the installed version**
-- **VERIFY version ranges using semantic versioning**
-- **DO NOT hallucinate or invent vulnerabilities**
-- **Cross-reference multiple sources for accuracy**
-
-#### Step 3: Vulnerability Severity Assessment
-For each confirmed vulnerability:
-- Extract CVE ID, GHSA ID, or other identifiers
-- Determine CVSS score and severity (Critical/High/Medium/Low)
-- Analyze exploitability and impact
-- Check for known active exploitation
-- Assess business risk context
-
-#### Step 4: Mitigation Strategy Development
-Provide specific, actionable recommendations:
-- **Immediate Actions**: Emergency mitigations if critical vulnerabilities exist
-- **Upgrade Path**: Specific version recommendations with rationale
-- **Workarounds**: Alternative solutions if upgrades aren't immediately feasible
-- **Monitoring**: Ongoing security monitoring recommendations
-
-### LICENSE COMPLIANCE ANALYSIS:
-
-#### Comprehensive License Evaluation:
-1. **License Classification**:
-   - Permissive (MIT, Apache-2.0, BSD variants)
-   - Weak Copyleft (LGPL, MPL)
-   - Strong Copyleft (GPL variants, AGPL)
-   - Proprietary/Commercial
-   - Custom/Other
-
-2. **Enterprise Compliance Assessment**:
-   - Commercial use restrictions
-   - Distribution requirements
-   - Source code disclosure obligations
-   - Patent grant clauses
-   - Compatibility with organizational policies
-
-3. **Risk Analysis**:
-   - Legal compliance risks
-   - Intellectual property concerns
-   - Operational constraints
-   - Supply chain implications
-
-### OUTPUT REQUIREMENTS:
-
-For each component, provide:
-
-**Name**: Exact component name as provided
-**Variation**: Component type/classification  
-**Installed Version**: Current version in use
-**Latest Version**: Most recent stable release
-**Package URL**: Canonical package repository URL
-**Distribution URL**: Direct download/access URL
-**License**: Full license identifier and terms
-
-**Vulnerabilities**: 
-- Format: Comprehensive markdown analysis
-- Structure: `- **CVE-XXXX-XXXX** (Severity: CRITICAL/HIGH/MEDIUM/LOW) [CVSS: X.X]: Detailed description explaining the vulnerability, its impact, and attack vectors. **Affects installed version X.Y.Z** - Exploitation likelihood: [HIGH/MEDIUM/LOW]`
-- If none: "✅ No known vulnerabilities affecting the installed version"
-- Include references to security advisories where applicable
-
-**Suggestions**:
-- **Critical/High**: "🚨 URGENT: Upgrade to version X.Y.Z immediately - Critical security vulnerability detected"
-- **Medium**: "⚠️ RECOMMENDED: Upgrade to version X.Y.Z within [timeframe] - Security improvements available"  
-- **Low/None**: "✅ OPTIONAL: Consider upgrading to version X.Y.Z for latest features and minor security improvements"
-- **No upgrade available**: "🔍 MONITOR: No patches available - Implement additional security controls and monitor for updates"
-
-**License Summary**: 
-Single-line assessment focusing on enterprise usability: "License type allows/restricts commercial use with [specific requirements/restrictions]"
-
-**Verdict**:
-- **✅ Allowed for Enterprise Use**: For licenses compatible with commercial use (MIT, Apache-2.0, BSD, etc.)
-- **⚠️ Requires Legal Review**: For licenses with restrictions or obligations (GPL, AGPL, custom licenses)
-- **❌ Restricted Use**: For licenses explicitly prohibiting commercial use
-
-### QUALITY ASSURANCE REQUIREMENTS:
-- **Accuracy**: Only report verified vulnerabilities from authoritative sources
-- **Completeness**: Check multiple vulnerability databases for comprehensive coverage
-- **Timeliness**: Use current vulnerability data (check publication/disclosure dates)
-- **Actionability**: Provide specific, implementable recommendations
-- **Risk-Based**: Prioritize findings by actual business impact
-
-### ECOSYSTEM MAPPING:
-- **PyPI packages** → "PyPI" ecosystem
-- **npm packages** → "npm" ecosystem  
-- **Maven packages** → "Maven" ecosystem
-- **System components** → "Generic" or component-specific ecosystem
-- **Docker images** → "Docker" ecosystem
-
-### PHP-SPECIFIC CONSIDERATIONS:
-- **Composer packages**: Check FriendsOfPHP security advisories database
-- **WordPress plugins/themes**: Additional security considerations for CMS components
-- **Framework-specific**: Laravel, Symfony, CodeIgniter specific security patterns
-- **PHP version compatibility**: Consider PHP version-specific vulnerabilities
-
-### ERROR HANDLING:
-- If vulnerability data is unavailable: "Vulnerability data temporarily unavailable - recommend manual security review"
-- If license information is unclear: "License requires manual review - consult legal team"
-- If version comparison is impossible: "Version comparison inconclusive - verify manually"
-
-Return a properly formatted JSON object matching the exact schema requirements with all fields populated accurately."""
+# OpenAI client
+client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 
 async def analyze_package_vulnerabilities(package_dict):
@@ -399,6 +141,59 @@ async def analyze_package_vulnerabilities(package_dict):
             "License Summary": "Review required",
             "Verdict": "⚠️ Requires Legal Review",
         }
+
+
+async def worker(pkg, semaphore):
+    """Worker function with semaphore for rate limiting"""
+    async with semaphore:
+        return await analyze_package_vulnerabilities(pkg)
+
+
+async def analyze_packages_batch(package_dicts, concurrency=50):
+    """Analyze packages in batches using async processing"""
+    semaphore = asyncio.Semaphore(concurrency)
+    tasks = [asyncio.create_task(worker(pkg, semaphore)) for pkg in package_dicts]
+    results = []
+    for f in tqdm_asyncio.as_completed(
+        tasks, total=len(tasks), desc="Analyzing Vulnerabilities"
+    ):
+        result = await f
+        results.append(result)
+
+    return results
+
+
+# Pydantic models
+class SBOMRequest(BaseModel):
+    hostname: str
+    packages: List[dict]
+
+
+class PackageRequest(BaseModel):
+    package_name: str
+    package_type: str
+
+
+class LicenseResponse(BaseModel):
+    license: str
+
+
+class VersionResponse(BaseModel):
+    latest_version: str
+
+
+# Dependency
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+class BulkSBOMRequest(BaseModel):
+    hostname: str
+    analyzed_packages: List[dict]
 
 
 # SBOM Routes
@@ -493,6 +288,74 @@ async def get_sbom_data(hostname: Optional[str] = None, db: Session = Depends(ge
     }
 
 
+@app.post("/api/sbom/bulk-insert")
+async def bulk_insert_analyzed_sbom(request: dict, db: Session = Depends(get_db)):
+    """Bulk insert pre-analyzed SBOM data into database"""
+    try:
+        hostname = request.get("hostname")
+        analyzed_packages = request.get("analyzed_packages", [])
+
+        if not hostname or not analyzed_packages:
+            raise HTTPException(
+                status_code=400, detail="hostname and analyzed_packages are required"
+            )
+
+        print(
+            f"Bulk inserting {len(analyzed_packages)} analyzed components for {hostname}"
+        )
+
+        # Prepare all database entries for bulk insert
+        sbom_entries = []
+        successful_entries = 0
+        failed_entries = 0
+
+        for analysis_result in analyzed_packages:
+            try:
+                sbom_entry = SBOMData(
+                    hostname=hostname,
+                    package_name=analysis_result.get("Name", ""),
+                    package_type=analysis_result.get("Variation", ""),
+                    installed_version=analysis_result.get("Installed Version", ""),
+                    latest_version=analysis_result.get("Latest Version", ""),
+                    license=analysis_result.get("License", ""),
+                    vulnerabilities=analysis_result.get("Vulnerabilities", ""),
+                    suggestions=analysis_result.get("Suggestions", ""),
+                    license_summary=analysis_result.get("License Summary", ""),
+                    verdict=analysis_result.get("Verdict", ""),
+                    package_url=analysis_result.get("Package URL", ""),
+                    distribution_url=analysis_result.get("Distribution URL", ""),
+                )
+                sbom_entries.append(sbom_entry)
+                successful_entries += 1
+
+            except Exception as e:
+                print(
+                    f"Error preparing entry for {analysis_result.get('Name', 'Unknown')}: {e}"
+                )
+                failed_entries += 1
+                continue
+
+        # Bulk insert all entries at once
+        if sbom_entries:
+            print(f"Performing bulk insert of {len(sbom_entries)} entries...")
+            db.add_all(sbom_entries)
+            db.commit()
+            print(f"Successfully committed {len(sbom_entries)} entries to database")
+
+        return {
+            "status": "success",
+            "message": f"Bulk inserted {successful_entries} analyzed components for {hostname}",
+            "successful_entries": successful_entries,
+            "failed_entries": failed_entries,
+            "total_processed": len(analyzed_packages),
+        }
+
+    except Exception as e:
+        db.rollback()
+        print(f"Error during bulk insert: {e}")
+        raise HTTPException(status_code=500, detail=f"Bulk insert failed: {str(e)}")
+
+
 @app.get("/api/sbom/export")
 async def export_sbom_data(
     hostname: Optional[str] = None, db: Session = Depends(get_db)
@@ -555,9 +418,6 @@ async def import_qualys_data(db: Session = Depends(get_db)):
 
         if not all_detections:
             raise HTTPException(status_code=404, detail="No Qualys data found")
-
-        # Clear existing data (optional - you might want to update instead)
-        # db.query(QualysData).delete()
 
         # Insert new data
         new_records = 0
@@ -1045,4 +905,4 @@ async def root():
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8059)

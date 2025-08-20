@@ -16,7 +16,7 @@ import {
   ChevronRight
 } from 'lucide-react';
 
-const API_BASE_URL = 'http://localhost:8000/api';
+const API_BASE_URL = 'http://localhost:8059/api';
 
 const Pagination = ({ currentPage, totalItems, itemsPerPage, onPageChange }) => {
   const totalPages = Math.ceil(totalItems / itemsPerPage);
@@ -255,6 +255,21 @@ const SecurityDashboard = () => {
     return data.slice(startIndex, endIndex);
   };
 
+  // Helper function to get IP address from SBOM data
+  const getIpAddress = (hostname, sbomData) => {
+    // Try different possible field names for IP address
+    const hostData = sbomData.find(item => item.hostname === hostname);
+    if (!hostData) return 'Unknown';
+    
+    // Check various possible field names
+    return hostData.ip_address || 
+           hostData.ipaddress || 
+           hostData.ip || 
+           hostData.host_ip || 
+           hostData.asset_ip ||
+           'Unknown';
+  };
+
   // Get host-specific data
   const getHostOverview = () => {
     const hostnames = getUniqueHostnames();
@@ -287,7 +302,7 @@ const SecurityDashboard = () => {
       const lastScanned = hostData.length > 0 ? new Date().toLocaleDateString() + ', ' + new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : 'Never';
       
       // Get IP address if available in your data
-      const ipAddress = hostData.length > 0 ? (hostData[0].ip_address || 'Unknown') : 'Unknown';
+      const ipAddress = getIpAddress(hostname, sbomData);
       
       return {
         hostname,
@@ -694,9 +709,17 @@ const SecurityDashboard = () => {
                             </td>
                             <td className="px-6 py-4">
                               <div className="space-y-1">
-                                {getVulnerabilityBadge(item.vulnerabilities)}
+                                <div 
+                                  className="cursor-help"
+                                  title={item.vulnerabilities}
+                                >
+                                  {getVulnerabilityBadge(item.vulnerabilities)}
+                                </div>
                                 {item.vulnerabilities && item.vulnerabilities.length > 50 && (
-                                  <div className="text-xs text-gray-600 max-w-xs">
+                                  <div 
+                                    className="text-xs text-gray-600 max-w-xs cursor-help"
+                                    title={item.vulnerabilities}
+                                  >
                                     {item.vulnerabilities.substring(0, 100)}...
                                   </div>
                                 )}
@@ -706,7 +729,9 @@ const SecurityDashboard = () => {
                               {getSeverityBadge(item.verdict)}
                             </td>
                             <td className="px-6 py-4">
-                              <div className="text-sm text-gray-900 max-w-xs">
+                              <div className="text-sm text-gray-900 max-w-xs cursor-help"
+                                title={item.suggestions}
+                                >
                                 {item.suggestions && item.suggestions.length > 50 
                                   ? `${item.suggestions.substring(0, 100)}...`
                                   : item.suggestions

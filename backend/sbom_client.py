@@ -12,7 +12,9 @@ import pandas as pd
 from tqdm import tqdm
 from bs4 import BeautifulSoup
 from pydantic import BaseModel
+import asyncio
 from fastapi import FastAPI, HTTPException
+from main_server import analyze_packages_batch
 
 load_dotenv()
 
@@ -1117,16 +1119,33 @@ def generate_and_send_sbom():
     # Combine all components
     all_components = system_components + packages
 
-    print(
-        f"📤 Sending {len(all_components)} components to unified server for analysis..."
-    )
+    print(f"🔍 Analyzing {len(all_components)} components locally using AI...")
 
     # Send data to unified server
     try:
+        analyzed_packages = asyncio.run(
+            analyze_packages_batch(all_components, concurrency=50)
+        )
+        print(
+            f"✅ Completed vulnerability analysis for {len(analyzed_packages)} components"
+        )
+    except Exception as e:
+        print(f"❌ Error during batch analysis: {e}")
+        return
+
+    print(f"📤 Sending analyzed data to unified server for bulk database insertion...")
+
+    try:
+        # Create the request payload with analyzed data
+        payload = {
+            "hostname": hostname,
+            "analyzed_packages": analyzed_packages,  # Send already analyzed data
+        }
+
         response = requests.post(
-            f"{UNIFIED_SERVER_URL}/api/sbom/analyze",
-            json={"hostname": hostname, "packages": all_components},
-            timeout=300,  # 5 minutes timeout for analysis
+            f"{UNIFIED_SERVER_URL}/api/sbom/bulk-insert",  # New endpoint for bulk insert
+            json=payload,
+            timeout=60,  # Shorter timeout since no analysis on server
         )
 
         if response.status_code == 200:
@@ -1140,7 +1159,7 @@ def generate_and_send_sbom():
     except Exception as e:
         print(f"❌ Error sending SBOM data: {e}")
 
-    print(f"🏁 SBOM generation completed for {hostname}")
+    print(f"🏁 SBOM generation and analysis completed for {hostname}")
 
 
 if __name__ == "__main__":
