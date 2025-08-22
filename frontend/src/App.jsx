@@ -704,7 +704,7 @@ const SecurityDashboard = () => {
                             </td>
                             <td className="px-6 py-4">
                               <div className="text-sm text-gray-900 max-w-xs truncate" title={item.license}>
-                                {item.license || 'Unknown'}
+                                {item.license}
                               </div>
                             </td>
                             <td className="px-6 py-4">

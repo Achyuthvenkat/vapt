@@ -121,7 +121,7 @@ async def analyze_package_vulnerabilities(package_dict):
             ],
             text={"format": OUTPUT_SCHEMA},
             tools=[{"type": "web_search_preview"}],
-            temperature=0.0,
+            temperature=0.2,
         )
         out_txt = response.output_text.strip()
         return json.loads(out_txt)
@@ -149,7 +149,7 @@ async def worker(pkg, semaphore):
         return await analyze_package_vulnerabilities(pkg)
 
 
-async def analyze_packages_batch(package_dicts, concurrency=50):
+async def analyze_packages_batch(package_dicts, concurrency=10):
     """Analyze packages in batches using async processing"""
     semaphore = asyncio.Semaphore(concurrency)
     tasks = [asyncio.create_task(worker(pkg, semaphore)) for pkg in package_dicts]
@@ -746,9 +746,6 @@ async def get_license(package_request: PackageRequest):
     """Get license information for a package"""
     # Implementation from original server
     return LicenseResponse(license="Implementation needed")
-
-
-# Helper functions
 
 
 def parse_qualys_xml(xml_data):

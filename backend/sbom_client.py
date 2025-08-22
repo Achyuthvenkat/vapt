@@ -416,7 +416,7 @@ def fetch_license_from_libraries_io(package_name: str, package_type: str) -> str
     return ""
 
 
-def get_license(package_request: PackageRequest):
+def get_license(package_request: PackageRequest) -> LicenseResponse:
     """
     Get license information for a package from various package registries with multiple fallbacks
 
@@ -528,7 +528,7 @@ def fetch_license(package_name, package_type):
         )
         resp = get_license(package_data)
         if resp.status_code == 200:
-            return resp.json().get("license", "")
+            return resp.model_dump_json().get("license", "")
         return ""
     except:
         return ""
@@ -583,6 +583,10 @@ def fetch_pypi_package_info_with_fallbacks(package_name: str) -> str:
         if license_info and license_info.strip():
             return license_info.strip()
 
+        license_info = info.get("license") or ""
+        if license_info and license_info.strip():
+            return license_info.strip()
+
         # Method 3: Project URLs - GitHub
         project_urls = info.get("project_urls", {})
         github_urls = []
@@ -610,11 +614,13 @@ def fetch_pypi_package_info_with_fallbacks(package_name: str) -> str:
 
         # Method 4: Libraries.io fallback
         libraries_io_license = fetch_license_from_libraries_io(package_name, "pypi")
+
         if libraries_io_license:
             return libraries_io_license
 
         # Method 5: Try PyPI simple API for additional metadata
         simple_api_license = fetch_from_pypi_simple_api(package_name)
+
         if simple_api_license:
             return simple_api_license
 
@@ -790,14 +796,17 @@ def get_latest_nodejs_version():
         response.raise_for_status()
 
         soup = BeautifulSoup(response.content, "html.parser")
-        download_buttons = soup.find_all("a", class_=re.compile(r"home-downloadbutton"))
-        for button in download_buttons:
-            text = button.get_text()
-            version_match = re.search(r"v?(\d+\.\d+\.\d+)", text)
-            if version_match:
-                return version_match.group(1)
+        # download_buttons = soup.find_all("a", class_=re.compile(r"home-downloadbutton"))
+        # for button in download_buttons:
+        #     text = button.get_text()
+        #     version_match = re.search(r"v?(\d+\.\d+\.\d+)", text)
+        #     if version_match:
+        #         return version_match.group(1)
+        # return "Version not found"
+        latest_release = soup.find("span", string=re.compile(r"Latest Release"))
+        version = latest_release.find_previous("span").text
 
-        return "Version not found"
+        return version
 
     except Exception as e:
         return f"Error fetching data: {e}"
@@ -1124,7 +1133,7 @@ def generate_and_send_sbom():
     # Send data to unified server
     try:
         analyzed_packages = asyncio.run(
-            analyze_packages_batch(all_components, concurrency=50)
+            analyze_packages_batch(all_components, concurrency=10)
         )
         print(
             f"✅ Completed vulnerability analysis for {len(analyzed_packages)} components"

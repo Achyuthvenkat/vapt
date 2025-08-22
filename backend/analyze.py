@@ -46,7 +46,7 @@ OUTPUT_SCHEMA = {
             },
             "Verdict": {
                 "type": "string",
-                "description": "A final verdict on whether the package can be used in commercial and corparate organizations or not based on the complainces regarding its license, If can be used in commercial and corparate organizations then give **Allowed for Enterprice use**, if cannot be used the give **Requires Legal Review before organizational use**",
+                "description": "A final verdict on whether the package can be used in commercial and corparate organizations or not based on the complainces regarding its license, If can be used in commercial and corparate organizations then give **Allowed for Enterprise use**, if cannot be used the give **Requires Legal Review before organizational use**",
             },
         },
         "required": [
@@ -181,6 +181,7 @@ For each component, provide:
 **Vulnerabilities**: 
 - Format: Comprehensive markdown analysis
 - Structure: `- **CVE-XXXX-XXXX** (Severity: CRITICAL/HIGH/MEDIUM/LOW) [CVSS: X.X]: Detailed description explaining the vulnerability, its impact, and attack vectors. **Affects installed version X.Y.Z** - Exploitation likelihood: [HIGH/MEDIUM/LOW]`
+- If no severity: Run analysis on vulnerability and mention the severity based on the analysis
 - If none: "✅ No known vulnerabilities affecting the installed version"
 - Include references to security advisories where applicable
 
@@ -194,9 +195,9 @@ For each component, provide:
 Single-line assessment focusing on enterprise usability: "License type allows/restricts commercial use with [specific requirements/restrictions]"
 
 **Verdict**:
-- **✅ Allowed for Enterprise Use**: For licenses compatible with commercial use (MIT, Apache-2.0, BSD, etc.)
-- **⚠️ Requires Legal Review**: For licenses with restrictions or obligations (GPL, AGPL, custom licenses)
-- **❌ Restricted Use**: For licenses explicitly prohibiting commercial use
+- **Allowed for Enterprise Use**: For licenses compatible with commercial use (MIT, Apache-2.0, BSD, etc.). Give two astrisks(*) before and after the text.
+- **Requires Legal Review**: For licenses with restrictions or obligations (GPL, AGPL, custom licenses)
+- **Restricted Use**: For licenses explicitly prohibiting commercial use
 
 ### QUALITY ASSURANCE REQUIREMENTS:
 - **Accuracy**: Only report verified vulnerabilities from authoritative sources
