@@ -241,7 +241,8 @@ const SecurityDashboard = () => {
       filtered = filtered.filter(item => 
         (item.asset_name && item.asset_name.toLowerCase().includes(searchTerm.toLowerCase())) ||
         (item.asset_ip && item.asset_ip.toLowerCase().includes(searchTerm.toLowerCase())) ||
-        (item.qid && item.qid.toString().includes(searchTerm))
+        (item.qid && item.qid.toString().includes(searchTerm)) ||
+        (item.vulnerability_title && item.vulnerability_title.toLowerCase().includes(searchTerm.toLowerCase()))
       );
     }
     
@@ -767,7 +768,7 @@ const SecurityDashboard = () => {
                     <Search className="h-4 w-4 absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
                     <input
                       type="text"
-                      placeholder="Search assets, IPs, or QIDs..."
+                      placeholder="Search assets, IPs, QIDs, or vulnerability titles..."
                       className="pl-10 pr-4 py-2 border border-gray-300 rounded-lg w-80"
                       value={searchTerm}
                       onChange={(e) => {
@@ -885,13 +886,13 @@ const SecurityDashboard = () => {
                         QID
                       </th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Vulnerability Title
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                         Severity
                       </th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                         QDS Score
-                      </th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                        Port/Protocol
                       </th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                         Status
@@ -933,6 +934,17 @@ const SecurityDashboard = () => {
                             <div className="text-sm font-medium text-blue-600">{item.qid}</div>
                             <div className="text-xs text-gray-500">{item.vuln_type}</div>
                           </td>
+                          <td className="px-6 py-4">
+                            <div 
+                              className="text-sm text-gray-900 max-w-sm cursor-help"
+                              title={item.vulnerability_title}
+                            >
+                              {item.vulnerability_title && item.vulnerability_title.length > 80
+                                ? `${item.vulnerability_title.substring(0, 80)}...`
+                                : item.vulnerability_title || 'Title not available'
+                              }
+                            </div>
+                          </td>
                           <td className="px-6 py-4 whitespace-nowrap">
                             <QualysSeverityBadge severity={item.qds_severity} />
                             <div className="text-xs text-gray-500 mt-1">Level: {item.severity}</div>
@@ -941,12 +953,6 @@ const SecurityDashboard = () => {
                             <div className="text-sm font-medium text-gray-900">
                               {item.qds ? parseFloat(item.qds).toFixed(1) : 'N/A'}
                             </div>
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap">
-                            <div className="text-sm text-gray-900">
-                              {item.port && item.protocol ? `${item.port}/${item.protocol}` : 'N/A'}
-                            </div>
-                            {item.ssl && <div className="text-xs text-green-600">SSL</div>}
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap">
                             <span className={`px-2 py-1 text-xs rounded-full ${

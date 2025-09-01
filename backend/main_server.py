@@ -17,10 +17,12 @@ from typing import List, Optional
 import re
 import asyncio
 from tqdm.asyncio import tqdm_asyncio
+from tqdm import tqdm
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
 from analyze import INSTRUCTIONS, OUTPUT_SCHEMA
 import nest_asyncio
+import time
 
 # Apply nest_asyncio for async compatibility
 nest_asyncio.apply()
@@ -46,6 +48,9 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
+
+# Global cache for QID titles
+qid_title_cache = {}
 
 
 # Database Models
@@ -82,6 +87,7 @@ class QualysData(Base):
     last_scan_datetime = Column(DateTime)
     unique_vuln_id = Column(String(100))
     qid = Column(String(20))
+    vulnerability_title = Column(Text)  # Added vulnerability title field
     vuln_type = Column(String(50))
     severity = Column(Integer)
     port = Column(String(10))
@@ -196,7 +202,97 @@ class BulkSBOMRequest(BaseModel):
     analyzed_packages: List[dict]
 
 
-# SBOM Routes
+def fetch_vulnerability_titles(qids_list):
+    """
+    Fetch vulnerability titles for a list of QIDs from KnowledgeBase API.
+    """
+    global qid_title_cache
+
+    if not qids_list:
+        return {}
+
+    # Remove duplicates and filter out cached QIDs
+    unique_qids = list(set(qids_list) - set(qid_title_cache.keys()))
+
+    if not unique_qids:
+        return qid_title_cache
+
+    print(f"Fetching titles for {len(unique_qids)} unique QIDs...")
+
+    # Qualys KB API configuration
+    QUALYS_KB_API_URL = (
+        "https://qualysapi.qg2.apps.qualys.com/api/2.0/fo/knowledge_base/vuln/"
+    )
+    USERNAME = os.getenv("USERNAME1")
+    PASSWORD = os.getenv("PASSWORD")
+
+    # Process QIDs in batches of 100 (API limitation)
+    batch_size = 100
+    headers = {"X-Requested-With": "requests"}
+
+    for i in tqdm(
+        range(0, len(unique_qids), batch_size), desc="Fetching titles", unit="batch"
+    ):
+        batch_qids = unique_qids[i : i + batch_size]
+        qids_param = ",".join(map(str, batch_qids))
+
+        kb_params = {
+            "action": "list",
+            "ids": qids_param,
+            "details": "Basic",  # Get basic details including title
+        }
+
+        try:
+            response = requests.post(
+                QUALYS_KB_API_URL,
+                auth=(USERNAME, PASSWORD),
+                data=kb_params,
+                headers=headers,
+            )
+
+            if response.status_code == 200:
+                parse_kb_response(response.text)
+            else:
+                print(
+                    f"Warning: Failed to fetch titles for batch {i//batch_size + 1}. Status: {response.status_code}"
+                )
+                # Add placeholder titles for failed QIDs
+                for qid in batch_qids:
+                    qid_title_cache[qid] = f"Title unavailable for QID {qid}"
+
+            # Rate limiting - small delay between requests
+            time.sleep(0.5)
+
+        except requests.exceptions.RequestException as e:
+            print(f"Error fetching titles for batch {i//batch_size + 1}: {e}")
+            # Add placeholder titles for failed QIDs
+            for qid in batch_qids:
+                qid_title_cache[qid] = f"Error fetching title for QID {qid}"
+
+    return qid_title_cache
+
+
+def parse_kb_response(xml_data):
+    """
+    Parse KnowledgeBase API response to extract QID to title mappings.
+    """
+    global qid_title_cache
+
+    try:
+        root = ET.fromstring(xml_data)
+
+        for vuln in root.findall(".//VULN"):
+            qid = vuln.findtext("QID")
+            title = vuln.findtext("TITLE")
+
+            if qid and title:
+                qid_title_cache[qid] = title.strip()
+
+    except ET.ParseError as e:
+        print(f"Error parsing KnowledgeBase response: {e}")
+
+
+# SBOM Routes (unchanged)
 @app.post("/api/sbom/analyze")
 async def analyze_sbom(request: SBOMRequest, db: Session = Depends(get_db)):
     """Analyze SBOM packages and store in database"""
@@ -446,6 +542,9 @@ async def import_qualys_data(db: Session = Depends(get_db)):
                     ),
                     unique_vuln_id=detection.get("UniqueVulnID"),
                     qid=detection.get("QID"),
+                    vulnerability_title=detection.get(
+                        "VulnerabilityTitle", ""
+                    ),  # Added title
                     vuln_type=detection.get("Type"),
                     severity=parse_int(detection.get("Severity")),
                     port=detection.get("Port"),
@@ -610,6 +709,7 @@ async def get_qualys_data(
                 ),
                 "unique_vuln_id": item.unique_vuln_id,
                 "qid": item.qid,
+                "vulnerability_title": item.vulnerability_title,  # Added title
                 "vuln_type": item.vuln_type,
                 "severity": item.severity,
                 "port": item.port,
@@ -670,6 +770,7 @@ async def export_qualys_data(db: Session = Depends(get_db)):
                 ),
                 "Unique Vuln ID": item.unique_vuln_id,
                 "QID": item.qid,
+                "Vulnerability Title": item.vulnerability_title,  # Added title
                 "Vuln Type": item.vuln_type,
                 "Severity": item.severity,
                 "Port": item.port,
@@ -749,14 +850,30 @@ async def get_license(package_request: PackageRequest):
 
 
 def parse_qualys_xml(xml_data):
-    """Parse Qualys XML response and extract vulnerability data"""
+    """Parse Qualys XML response and extract vulnerability data with titles"""
     try:
         root = ET.fromstring(xml_data)
         results = []
+        unique_qids = set()
 
         hosts = root.findall(".//HOST")
 
+        # First pass: collect unique QIDs
+        print("Collecting unique QIDs...")
         for host in hosts:
+            detections = host.findall("DETECTION_LIST/DETECTION")
+            for det in detections:
+                qid = det.findtext("QID")
+                if qid:
+                    unique_qids.add(qid)
+
+        # Fetch titles for all unique QIDs
+        if unique_qids:
+            fetch_vulnerability_titles(list(unique_qids))
+
+        # Second pass: parse all detection data
+        print("Parsing host detection data...")
+        for host in tqdm(hosts, desc="Parsing hosts", unit="host"):
             asset_id = host.findtext("ID")
             asset_ip = host.findtext("IP")
             asset_name = host.findtext("DNS")
@@ -785,20 +902,21 @@ def parse_qualys_xml(xml_data):
             for det in detections:
                 qid = det.findtext("QID")
                 unique_vuln_id = det.findtext("UNIQUE_VULN_ID")
-                vuln_type = det.findtext(
-                    "TYPE"
-                )  # Confirmed, Potential, Information Gathered
+                vuln_type = det.findtext("TYPE")
                 severity = det.findtext("SEVERITY")
                 port = det.findtext("PORT")
                 protocol = det.findtext("PROTOCOL")
                 ssl = det.findtext("SSL")
-                status = det.findtext("STATUS")  # Active, New, Fixed, Re-Opened
+                status = det.findtext("STATUS")
                 first_found = det.findtext("FIRST_FOUND_DATETIME")
                 last_found = det.findtext("LAST_FOUND_DATETIME")
                 last_test = det.findtext("LAST_TEST_DATETIME")
                 last_update = det.findtext("LAST_UPDATE_DATETIME")
                 times_found = det.findtext("TIMES_FOUND")
                 results_text = det.findtext("RESULTS")
+
+                # Get vulnerability title from cache
+                vuln_title = qid_title_cache.get(qid, f"Title not found for QID {qid}")
 
                 # QDS (Qualys Detection Score) if available
                 qds_elem = det.find("QDS")
@@ -828,6 +946,7 @@ def parse_qualys_xml(xml_data):
                         "LastVMScannedDate": last_vm_scanned_date,
                         "UniqueVulnID": unique_vuln_id,
                         "QID": qid,
+                        "VulnerabilityTitle": vuln_title,  # Added title
                         "Type": vuln_type,
                         "Severity": severity,
                         "Port": port,
