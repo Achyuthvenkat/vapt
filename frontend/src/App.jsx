@@ -16,7 +16,7 @@ import {
   ChevronRight
 } from 'lucide-react';
 
-const API_BASE_URL = 'http://localhost:8059/api';
+const API_BASE_URL = 'http://10.160.14.76:8058/api';
 
 const Pagination = ({ currentPage, totalItems, itemsPerPage, onPageChange }) => {
   const totalPages = Math.ceil(totalItems / itemsPerPage);
@@ -898,7 +898,7 @@ const SecurityDashboard = () => {
                         Status
                       </th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                        Last Found
+                        Last Detected
                       </th>
                     </tr>
                   </thead>

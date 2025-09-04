@@ -23,6 +23,8 @@ from openai import AsyncOpenAI
 from analyze import INSTRUCTIONS, OUTPUT_SCHEMA
 import nest_asyncio
 import time
+from sqlalchemy import UniqueConstraint
+from sqlalchemy.exc import IntegrityError
 
 # Apply nest_asyncio for async compatibility
 nest_asyncio.apply()
@@ -72,6 +74,12 @@ class SBOMData(Base):
     distribution_url = Column(Text)
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        UniqueConstraint(
+            "hostname", "package_name", "installed_version", name="uq_host_pkg_version"
+        ),
+    )
 
 
 class QualysData(Base):
@@ -292,44 +300,52 @@ def parse_kb_response(xml_data):
         print(f"Error parsing KnowledgeBase response: {e}")
 
 
+class AnalyzeRequest(BaseModel):
+    all_components: list
+    hostname: str
+
+
 # SBOM Routes (unchanged)
 @app.post("/api/sbom/analyze")
-async def analyze_sbom(request: SBOMRequest, db: Session = Depends(get_db)):
+async def analyze_sbom(request: AnalyzeRequest, db: Session = Depends(get_db)):
     """Analyze SBOM packages and store in database"""
     try:
+        analyzed_packages = asyncio.run(
+            analyze_packages_batch(request.all_components, concurrency=10)
+        )
         hostname = request.hostname
-        packages = request.packages
+        packages = analyzed_packages
 
         # Collect all analyzed packages first
-        analyzed_packages = []
+        # analyzed_packages = []
         sbom_entries = []
 
         print(f"Starting analysis of {len(packages)} packages for {hostname}")
 
         # Analyze each package and collect results
-        for i, package in enumerate(packages, 1):
+        for i, package_result in enumerate(packages, 1):
             print(
-                f"Analyzing package {i}/{len(packages)}: {package.get('name', 'Unknown')}"
+                f"Analyzing package {i}/{len(packages)}: {package_result.get('Name', 'Unknown')}"
             )
 
             # Call OpenAI for vulnerability analysis
-            analysis_result = await analyze_package_vulnerabilities(package)
-            analyzed_packages.append(analysis_result)
+            # analysis_result = await analyze_package_vulnerabilities(package)
+            # analyzed_packages.append(analysis_result)
 
             # Prepare database entry (don't add to session yet)
             sbom_entry = SBOMData(
                 hostname=hostname,
-                package_name=analysis_result.get("Name", ""),
-                package_type=analysis_result.get("Variation", ""),
-                installed_version=analysis_result.get("Installed Version", ""),
-                latest_version=analysis_result.get("Latest Version", ""),
-                license=analysis_result.get("License", ""),
-                vulnerabilities=analysis_result.get("Vulnerabilities", ""),
-                suggestions=analysis_result.get("Suggestions", ""),
-                license_summary=analysis_result.get("License Summary", ""),
-                verdict=analysis_result.get("Verdict", ""),
-                package_url=analysis_result.get("Package URL", ""),
-                distribution_url=analysis_result.get("Distribution URL", ""),
+                package_name=package_result.get("Name", ""),
+                package_type=package_result.get("Variation", ""),
+                installed_version=package_result.get("Installed Version", ""),
+                latest_version=package_result.get("Latest Version", ""),
+                license=package_result.get("License", ""),
+                vulnerabilities=package_result.get("Vulnerabilities", ""),
+                suggestions=package_result.get("Suggestions", ""),
+                license_summary=package_result.get("License Summary", ""),
+                verdict=package_result.get("Verdict", ""),
+                package_url=package_result.get("Package URL", ""),
+                distribution_url=package_result.get("Distribution URL", ""),
             )
             sbom_entries.append(sbom_entry)
 
@@ -386,7 +402,7 @@ async def get_sbom_data(hostname: Optional[str] = None, db: Session = Depends(ge
 
 @app.post("/api/sbom/bulk-insert")
 async def bulk_insert_analyzed_sbom(request: dict, db: Session = Depends(get_db)):
-    """Bulk insert pre-analyzed SBOM data into database"""
+    """Bulk insert pre-analyzed SBOM data into database (skip duplicates)."""
     try:
         hostname = request.get("hostname")
         analyzed_packages = request.get("analyzed_packages", [])
@@ -400,10 +416,7 @@ async def bulk_insert_analyzed_sbom(request: dict, db: Session = Depends(get_db)
             f"Bulk inserting {len(analyzed_packages)} analyzed components for {hostname}"
         )
 
-        # Prepare all database entries for bulk insert
-        sbom_entries = []
-        successful_entries = 0
-        failed_entries = 0
+        successful_entries, skipped_entries, failed_entries = 0, 0, 0
 
         for analysis_result in analyzed_packages:
             try:
@@ -421,27 +434,25 @@ async def bulk_insert_analyzed_sbom(request: dict, db: Session = Depends(get_db)
                     package_url=analysis_result.get("Package URL", ""),
                     distribution_url=analysis_result.get("Distribution URL", ""),
                 )
-                sbom_entries.append(sbom_entry)
+                db.add(sbom_entry)
+                db.commit()
                 successful_entries += 1
 
-            except Exception as e:
-                print(
-                    f"Error preparing entry for {analysis_result.get('Name', 'Unknown')}: {e}"
-                )
-                failed_entries += 1
-                continue
+            except IntegrityError:
+                db.rollback()
+                skipped_entries += 1  # duplicate → skip
 
-        # Bulk insert all entries at once
-        if sbom_entries:
-            print(f"Performing bulk insert of {len(sbom_entries)} entries...")
-            db.add_all(sbom_entries)
-            db.commit()
-            print(f"Successfully committed {len(sbom_entries)} entries to database")
+            except Exception as e:
+                db.rollback()
+                print(f"Error inserting {analysis_result.get('Name', 'Unknown')}: {e}")
+                failed_entries += 1
 
         return {
             "status": "success",
-            "message": f"Bulk inserted {successful_entries} analyzed components for {hostname}",
-            "successful_entries": successful_entries,
+            "message": f"Processed {len(analyzed_packages)} components "
+            f"({successful_entries} new, {skipped_entries} skipped, {failed_entries} failed)",
+            "new_entries": successful_entries,
+            "skipped_entries": skipped_entries,
             "failed_entries": failed_entries,
             "total_processed": len(analyzed_packages),
         }
@@ -1021,4 +1032,4 @@ async def root():
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=8059)
+    uvicorn.run(app, host="0.0.0.0", port=8058)
