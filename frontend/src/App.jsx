@@ -16,7 +16,7 @@ import {
   ChevronRight
 } from 'lucide-react';
 
-const API_BASE_URL = 'http://10.160.14.76:8058/api';
+const API_BASE_URL = 'http://10.160.14.76:8064/api';
 
 const Pagination = ({ currentPage, totalItems, itemsPerPage, onPageChange }) => {
   const totalPages = Math.ceil(totalItems / itemsPerPage);
